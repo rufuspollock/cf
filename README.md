@@ -37,6 +37,15 @@ export CF_API_TOKEN=your_token
 export CF_ACCOUNT_ID=your_account_id
 ```
 
+Auth fallback behavior:
+
+- `CF_API_TOKEN` or `CLOUDFLARE_API_TOKEN` is accepted.
+- `CF_ACCOUNT_ID` or `CLOUDFLARE_ACCOUNT_ID` is accepted.
+- If no token env var is set, CLI tries `wrangler auth token --json`.
+- If no account env var is set, CLI tries to infer account from `/memberships`:
+  - works automatically when token belongs to one account
+  - if multiple accounts are available, set `CF_ACCOUNT_ID` explicitly
+
 ### Commands
 
 ```bash

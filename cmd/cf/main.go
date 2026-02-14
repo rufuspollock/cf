@@ -18,6 +18,9 @@ import (
 
 const apiBase = "https://api.cloudflare.com/client/v4"
 
+var cachedAPIToken string
+var cachedAccountID string
+
 type apiError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -123,8 +126,9 @@ Usage:
   cf dns add --zone <zone-name> --type <A|AAAA|CNAME|TXT|...> --name <record-name> --content <value> [--ttl 1] [--proxied true|false]
 
 Required env vars:
-  CF_API_TOKEN   Cloudflare API token
-  CF_ACCOUNT_ID  Cloudflare account id
+  CF_API_TOKEN or CLOUDFLARE_API_TOKEN
+  CF_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID
+  (or Wrangler login for token fallback)
 
 Examples:
   CF_API_TOKEN=... CF_ACCOUNT_ID=... cf registrar list
@@ -132,17 +136,9 @@ Examples:
   CF_API_TOKEN=... CF_ACCOUNT_ID=... cf dns add --zone example.com --type A --name @ --content 1.2.3.4 --proxied false`)
 }
 
-func getRequiredEnv(name string) (string, error) {
-	v := strings.TrimSpace(os.Getenv(name))
-	if v == "" {
-		return "", fmt.Errorf("missing required env var: %s", name)
-	}
-	return v, nil
-}
-
 func requestCF(method, path string, body any) (apiResponse, error) {
 	var out apiResponse
-	token, err := getRequiredEnv("CF_API_TOKEN")
+	token, err := resolveAPIToken()
 	if err != nil {
 		return out, err
 	}
@@ -181,6 +177,124 @@ func requestCF(method, path string, body any) (apiResponse, error) {
 	return out, nil
 }
 
+func resolveAPIToken() (string, error) {
+	if cachedAPIToken != "" {
+		return cachedAPIToken, nil
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CF_API_TOKEN")); v != "" {
+		cachedAPIToken = v
+		return v, nil
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")); v != "" {
+		cachedAPIToken = v
+		return v, nil
+	}
+
+	token, err := tokenFromWrangler()
+	if err == nil && token != "" {
+		cachedAPIToken = token
+		return token, nil
+	}
+
+	return "", errors.New("missing API token. set CF_API_TOKEN (or CLOUDFLARE_API_TOKEN), or login via Wrangler")
+}
+
+func resolveAccountID() (string, error) {
+	if cachedAccountID != "" {
+		return cachedAccountID, nil
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CF_ACCOUNT_ID")); v != "" {
+		cachedAccountID = v
+		return v, nil
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CLOUDFLARE_ACCOUNT_ID")); v != "" {
+		cachedAccountID = v
+		return v, nil
+	}
+
+	token, err := resolveAPIToken()
+	if err != nil {
+		return "", err
+	}
+
+	accountID, err := inferAccountIDFromMemberships(token)
+	if err != nil {
+		return "", err
+	}
+
+	cachedAccountID = accountID
+	return accountID, nil
+}
+
+func tokenFromWrangler() (string, error) {
+	cmd := exec.Command("wrangler", "auth", "token", "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	var parsed struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(parsed.Token) == "" {
+		return "", errors.New("wrangler token output did not include token field")
+	}
+	return parsed.Token, nil
+}
+
+func inferAccountIDFromMemberships(token string) (string, error) {
+	req, err := http.NewRequest(http.MethodGet, apiBase+"/memberships", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Success bool       `json:"success"`
+		Errors  []apiError `json:"errors"`
+		Result  []struct {
+			Account struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"account"`
+		} `json:"result"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 || !payload.Success {
+		return "", formatAPIErrors(payload.Errors, resp.StatusCode)
+	}
+
+	if len(payload.Result) == 0 {
+		return "", errors.New("no Cloudflare account memberships found for token")
+	}
+	if len(payload.Result) == 1 {
+		return payload.Result[0].Account.ID, nil
+	}
+
+	choices := make([]string, 0, len(payload.Result))
+	for _, item := range payload.Result {
+		choices = append(choices, fmt.Sprintf("%s (%s)", item.Account.Name, item.Account.ID))
+	}
+	return "", fmt.Errorf("multiple accounts found; set CF_ACCOUNT_ID. available: %s", strings.Join(choices, ", "))
+}
+
 func formatAPIErrors(errs []apiError, status int) error {
 	if len(errs) == 0 {
 		return fmt.Errorf("Cloudflare API request failed (HTTP %d)", status)
@@ -193,7 +307,7 @@ func formatAPIErrors(errs []apiError, status int) error {
 }
 
 func listRegistrarDomains() error {
-	accountID, err := getRequiredEnv("CF_ACCOUNT_ID")
+	accountID, err := resolveAccountID()
 	if err != nil {
 		return err
 	}
@@ -220,7 +334,7 @@ func listRegistrarDomains() error {
 }
 
 func listZones() error {
-	accountID, err := getRequiredEnv("CF_ACCOUNT_ID")
+	accountID, err := resolveAccountID()
 	if err != nil {
 		return err
 	}
@@ -249,7 +363,7 @@ func listZones() error {
 }
 
 func getZoneByName(name string) (*zone, error) {
-	accountID, err := getRequiredEnv("CF_ACCOUNT_ID")
+	accountID, err := resolveAccountID()
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +387,7 @@ func getZoneByName(name string) (*zone, error) {
 }
 
 func addZone(domain string) (*zone, error) {
-	accountID, err := getRequiredEnv("CF_ACCOUNT_ID")
+	accountID, err := resolveAccountID()
 	if err != nil {
 		return nil, err
 	}
