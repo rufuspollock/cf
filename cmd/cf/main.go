@@ -68,6 +68,10 @@ func run() error {
 
 	switch args[0] {
 	case "wizard":
+		if len(args) > 1 && isHelp(args[1]) {
+			printWizardHelp()
+			return nil
+		}
 		return runWizard()
 	case "registrar":
 		if len(args) > 1 && args[1] == "list" {
@@ -118,12 +122,14 @@ func printHelp() {
 	fmt.Println(`cf: Cloudflare domain helper CLI
 
 Usage:
-  cf help
-  cf wizard
-  cf registrar list
-  cf zones list
-  cf zones add <domain>
+  cf help                                 Show this help message
+  cf wizard                               Guided flow to add a domain to Cloudflare
+  cf wizard --help                        Show detailed wizard behavior and limits
+  cf registrar list                       List domains in Cloudflare Registrar
+  cf zones list                           List zones in the Cloudflare account
+  cf zones add <domain>                   Add a domain as a Cloudflare zone
   cf dns add --zone <zone-name> --type <A|AAAA|CNAME|TXT|...> --name <record-name> --content <value> [--ttl 1] [--proxied true|false]
+                                          Create a DNS record in a zone
 
 Required env vars:
   CF_API_TOKEN or CLOUDFLARE_API_TOKEN
@@ -134,6 +140,21 @@ Examples:
   CF_API_TOKEN=... CF_ACCOUNT_ID=... cf registrar list
   CF_API_TOKEN=... CF_ACCOUNT_ID=... cf wizard
   CF_API_TOKEN=... CF_ACCOUNT_ID=... cf dns add --zone example.com --type A --name @ --content 1.2.3.4 --proxied false`)
+}
+
+func printWizardHelp() {
+	fmt.Println(`cf wizard: guided flow to add a domain to Cloudflare
+
+What it does:
+  1. Ask for the domain name
+  2. If not registered, show dashboard registration URL (and optionally open browser)
+  3. Add the domain as a Cloudflare zone
+  4. Optionally add DNS records interactively
+
+What it does not do:
+  - It does not fully automate purchasing/registering a new domain via API.
+    Domain purchase still happens in Cloudflare Dashboard.
+`)
 }
 
 func requestCF(method, path string, body any) (apiResponse, error) {
