@@ -2,6 +2,31 @@
 
 Register domain names through cloudflare on the command line like vercel does.
 
+## Install
+
+Download a binary for your OS/arch from:
+
+- https://github.com/rufuspollock/cf/releases/
+
+Then make it executable and put it on your `PATH` (macOS/Linux example):
+
+```bash
+chmod +x cf-darwin-arm64
+mv cf-darwin-arm64 /usr/local/bin/cf
+cf help
+```
+
+## Quick Start
+
+Try it out:
+
+```bash
+cf help
+cf wizard
+cf registrar list
+cf zones list
+```
+
 Goal is “Vercel-like DX”, implemented here as a Go CLI:
 
 Add commands like:
@@ -18,7 +43,7 @@ This aligns well with our stack like e.g. FlowerShow, DataHub etc.
 
 The repo includes a Go CLI (`cmd/cf/main.go`) that supports:
 
-- interactive onboarding wizard for semi-manual domain flow
+- interactive guided flow to add a domain
 - listing Cloudflare Registrar domains
 - listing zones in the account
 - adding a zone by domain name
@@ -28,13 +53,6 @@ The repo includes a Go CLI (`cmd/cf/main.go`) that supports:
 
 ```bash
 go build -o cf ./cmd/cf
-```
-
-Set auth env vars:
-
-```bash
-export CF_API_TOKEN=your_token
-export CF_ACCOUNT_ID=your_account_id
 ```
 
 Auth fallback behavior:
