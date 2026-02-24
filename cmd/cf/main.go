@@ -20,6 +20,9 @@ const apiBase = "https://api.cloudflare.com/client/v4"
 
 var cachedAPIToken string
 var cachedAccountID string
+var cmdRunner = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
 
 type apiError struct {
 	Code    int    `json:"code"`
@@ -143,7 +146,7 @@ Examples:
 }
 
 func printWizardHelp() {
-	fmt.Println(`cf wizard: guided flow to add a domain to Cloudflare
+	fmt.Print(`cf wizard: guided flow to add a domain to Cloudflare
 
 What it does:
   1. Ask for the domain name
@@ -252,8 +255,7 @@ func resolveAccountID() (string, error) {
 }
 
 func tokenFromWrangler() (string, error) {
-	cmd := exec.Command("wrangler", "auth", "token", "--json")
-	out, err := cmd.Output()
+	out, err := cmdRunner("wrangler", "auth", "token", "--json")
 	if err != nil {
 		return "", err
 	}
@@ -439,7 +441,61 @@ func addZone(domain string) (*zone, error) {
 		}
 	}
 
-	return nil, err
+	return nil, explainZoneCreatePermissionError(err)
+}
+
+func explainZoneCreatePermissionError(err error) error {
+	if err == nil || !strings.Contains(err.Error(), "com.cloudflare.api.account.zone.create") {
+		return err
+	}
+
+	var b strings.Builder
+	b.WriteString(err.Error())
+	b.WriteString("\n\nZone creation requires Cloudflare permission `com.cloudflare.api.account.zone.create`.\n")
+
+	switch detectAuthMode() {
+	case "wrangler":
+		b.WriteString("Auth mode detected: Wrangler token fallback.\n")
+		b.WriteString("Checking Wrangler identity with `wrangler whoami`:\n")
+		out, whoErr := wranglerWhoAmI()
+		if whoErr != nil {
+			b.WriteString("  - Could not run `wrangler whoami`.\n")
+			b.WriteString("  - Run it manually to inspect account roles and token scope.\n")
+		} else {
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				b.WriteString("  ")
+				b.WriteString(line)
+				b.WriteByte('\n')
+			}
+		}
+		b.WriteString("Next steps:\n")
+		b.WriteString("  1. Ensure you selected the intended account in the wizard.\n")
+		b.WriteString("  2. Confirm your Cloudflare member role can create zones for that account.\n")
+		b.WriteString("  3. Re-auth with Wrangler (`wrangler login`) if account context is wrong.\n")
+	default:
+		b.WriteString("Auth mode detected: API token from environment (`CF_API_TOKEN` or `CLOUDFLARE_API_TOKEN`).\n")
+		b.WriteString("Next steps:\n")
+		b.WriteString("  1. Use a token with zone-creation capability for the selected account.\n")
+		b.WriteString("  2. Verify the account ID points to the account where your role permits zone creation.\n")
+		b.WriteString("  3. Retry after updating token/account env vars.\n")
+	}
+
+	return errors.New(strings.TrimSpace(b.String()))
+}
+
+func detectAuthMode() string {
+	if strings.TrimSpace(os.Getenv("CF_API_TOKEN")) != "" || strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")) != "" {
+		return "api_token"
+	}
+	return "wrangler"
+}
+
+func wranglerWhoAmI() (string, error) {
+	out, err := cmdRunner("wrangler", "whoami")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func addDNSRecord(zoneName, typeName, name, content string, ttl int, proxied bool) error {
