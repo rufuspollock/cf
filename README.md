@@ -2,6 +2,9 @@
 
 Register domain names through cloudflare on the command line like vercel does.
 
+> [!warning]
+> Cloudflare does not support registering domains through its API (except on enterprise plan). So this tool has a wizard automates what it can and takes you to cloudflare dashboard for parts it can't (e.g. domain registration).
+
 ## Install
 
 Download a binary for your OS/arch from:
